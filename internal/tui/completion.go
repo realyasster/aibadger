@@ -363,7 +363,7 @@ func (m Model) goalInputCursorByteIndex() int {
 	}
 
 	li := m.goalInput.LineInfo()
-	runeIndex := li.StartColumn + li.CharOffset
+	runeIndex := li.StartColumn + li.ColumnOffset
 	if runeIndex < 0 {
 		runeIndex = 0
 	}

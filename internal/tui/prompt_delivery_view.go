@@ -91,6 +91,9 @@ func (m Model) viewContextReady() string {
 	var lines []string
 	for _, meta := range m.metadata {
 		status := ""
+		if meta.Status != "" {
+			status = " [" + meta.Status + "]"
+		}
 		if meta.Dropped {
 			status = " [DROPPED - EXCEEDS TOTAL LIMIT]"
 		} else if meta.Truncated {
@@ -103,7 +106,7 @@ func (m Model) viewContextReady() string {
 	}
 
 	promptTwoKind := codeContextPromptKind
-	warning := renderTruncationNotes(m.metadata)
+	warning := renderTruncationNotes(m.metadata) + renderIntegritySummary(m.metadata)
 
 	if m.promptDeliveryIsLarge(promptTwoKind) {
 		return fmt.Sprintf(
@@ -128,7 +131,13 @@ func (m Model) viewContextReady() string {
 func (m Model) viewContextWarning() string {
 	var availableLines []string
 	for _, meta := range m.pendingMetadata {
+		if meta.Status == "Excluded" || meta.Status == "Failed" {
+			continue
+		}
 		status := ""
+		if meta.Status != "" {
+			status = " [" + meta.Status + "]"
+		}
 		if meta.Dropped {
 			status = " [DROPPED - EXCEEDS TOTAL LIMIT]"
 		} else if meta.Truncated {
@@ -188,14 +197,32 @@ func (m Model) promptDeliveryText(kind string) string {
 }
 
 func (m Model) promptDeliveryIsLarge(kind string) bool {
+	if kind == codeContextPromptKind {
+		for _, meta := range m.metadata {
+			if meta.RequiresExport {
+				return true
+			}
+		}
+	}
 	return isLargePrompt(m.promptDeliveryText(kind), m.cfg.LargePromptByteThreshold)
 }
 
 func (m Model) viewLargePromptDelivery(kind, text string) string {
+	recommendation := "Recommended: copy it to the clipboard and paste it into your AI chat."
+	choice := "Choice (recommended: c):"
+	if kind == codeContextPromptKind {
+		for _, meta := range m.metadata {
+			if meta.RequiresExport {
+				recommendation = "Recommended: save the complete payload to a file and attach it to your AI chat. No extracted bytes were removed."
+				choice = "Choice (recommended: f):"
+				break
+			}
+		}
+	}
 	return strings.Join([]string{
 		renderWarningLine(fmt.Sprintf("This prompt is large (%s).", protocol.FormatFileSize(int64(len(text))))),
 		"",
-		"Recommended: copy it to the clipboard and paste it into your AI chat.",
+		recommendation,
 		"",
 		renderLabel("Options:"),
 		"  [c] Copy to clipboard",
@@ -204,7 +231,7 @@ func (m Model) viewLargePromptDelivery(kind, text string) string {
 		"  [p] Print to terminal",
 		"  [n] Skip",
 		"",
-		renderBold("Choice (recommended: c):"),
+		renderBold(choice),
 	}, "\n")
 }
 
@@ -221,6 +248,26 @@ func (m Model) viewLargeProjectDelivery() string {
 
 func (m Model) viewPromptFileReveal() string {
 	return fmt.Sprintf("Open containing folder? (y/N)\n\n%s", helpStyle.Render("The saved path above stays visible if opening fails or is skipped."))
+}
+
+func renderIntegritySummary(metadata []protocol.ExtractionMetadata) string {
+	full, partial, excluded, failed := 0, 0, 0, 0
+	for _, meta := range metadata {
+		switch meta.Status {
+		case "Full":
+			full++
+		case "Partial", "Truncated", "Dropped":
+			partial++
+		case "Excluded":
+			excluded++
+		case "Failed":
+			failed++
+		}
+	}
+	if full+partial+excluded+failed == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nRequests: %d; full: %d; partial: %d; excluded: %d; failed: %d.\n", len(metadata), full, partial, excluded, failed)
 }
 
 func renderTruncationNotes(metadata []protocol.ExtractionMetadata) string {

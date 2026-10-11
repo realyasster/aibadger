@@ -18,6 +18,7 @@ func (d *GenericDetector) collectGenericAugmentation(root string, ownership sema
 	packagesByLanguage := make(map[string]map[string]*model.Package)
 	bytesByLanguage := make(map[string]int64)
 	sourcesByLanguage := make(map[string]int)
+	filesByLanguage := make(map[string]map[string]string)
 	recordedPaths := make(map[string]bool)
 	var contextCandidates []projectContextCandidate
 	headerIndex := newCppCompanionHeaderIndex(root, ownership, d.maxFilesPerDir)
@@ -45,6 +46,10 @@ func (d *GenericDetector) collectGenericAugmentation(root string, ownership sema
 		recordedPaths[file.Path] = true
 		bytesByLanguage[language] += info.Size()
 		sourcesByLanguage[language]++
+		if filesByLanguage[language] == nil {
+			filesByLanguage[language] = make(map[string]string)
+		}
+		filesByLanguage[language][normalizeTopologyFilePath(file.Path)] = language
 
 		if language == "C++" || language == "C" {
 			if header, found := headerIndex.find(path); found && !recordedPaths[header.Path] {
@@ -65,7 +70,7 @@ func (d *GenericDetector) collectGenericAugmentation(root string, ownership sema
 	sort.Strings(languages)
 	modules := make([]model.Module, 0, len(languages))
 	for _, language := range languages {
-		module := model.Module{Name: language + " Source", Path: "", Language: language, Coverage: true, TotalBytes: bytesByLanguage[language], LanguageSourceCount: sourcesByLanguage[language]}
+		module := model.Module{Name: language + " Source", Path: "", Language: language, Coverage: true, TotalBytes: bytesByLanguage[language], LanguageSourceCount: sourcesByLanguage[language], LanguageSourceFiles: filesByLanguage[language]}
 		sourceRoot := model.SourceRoot{Path: "", Role: genericSourceRole}
 		packagePaths := make([]string, 0, len(packagesByLanguage[language]))
 		for path := range packagesByLanguage[language] {

@@ -4,7 +4,6 @@ package tui
 
 import (
 	"fmt"
-	"unicode/utf8"
 
 	"github.com/PVRLabs/aibadger/internal/protocol"
 	"github.com/PVRLabs/aibadger/internal/workflow"
@@ -33,9 +32,6 @@ func trimStringBytes(s string, limit int) string {
 	if limit <= 0 || len(s) <= limit {
 		return s
 	}
-	trimmed := s[:limit]
-	for len(trimmed) > 0 && !utf8.ValidString(trimmed) {
-		trimmed = trimmed[:len(trimmed)-1]
-	}
+	trimmed, _ := firstValidUTF8Bytes(s, limit)
 	return trimmed
 }

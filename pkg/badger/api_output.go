@@ -12,6 +12,15 @@ import (
 
 func printExtractionMetadata(w io.Writer, metadata []protocol.ExtractionMetadata) {
 	for _, meta := range metadata {
+		if meta.RequiresExport {
+			fmt.Fprintf(w, "  [!] %s exceeds delivery threshold; complete content retained, save stdout to a file.\n", meta.Path)
+		}
+		if meta.Status != "" {
+			fmt.Fprintf(w, "  %s: %s source_bytes=%d extracted_bytes=%d sha256=%s source_sha256=%s\n", meta.Path, meta.Status, meta.OriginalSize, meta.TransferredSize, meta.SHA256, meta.SourceSHA256)
+			if meta.Reason != "" {
+				fmt.Fprintf(w, "    %s\n", meta.Reason)
+			}
+		}
 		if meta.Dropped {
 			fmt.Fprintf(w, "  [!] %s (DROPPED - EXCEEDS TOTAL LIMIT)\n", meta.Path)
 		} else if meta.Truncated {

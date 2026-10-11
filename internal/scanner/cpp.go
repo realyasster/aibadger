@@ -84,12 +84,7 @@ func (c *CppDetector) Detect(root string) ([]model.Module, error) {
 }
 
 func isCppLanguageSourceFile(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".cpp", ".cc", ".cxx":
-		return true
-	default:
-		return false
-	}
+	return sourceExtensionLanguage(name) == "C++"
 }
 
 func (c *CppDetector) dirLimit() int {
@@ -195,10 +190,13 @@ func isCppActivationFile(path string) bool {
 }
 
 func buildCppModule(root string, candidates []cppCandidate) model.Module {
-	module := model.Module{Name: filepath.Base(root), Language: "C++"}
+	module := model.Module{Name: filepath.Base(root), Language: "C++", LanguageSourceFiles: make(map[string]string)}
 	byRoot := make(map[string]map[string][]cppCandidate)
 	rootRoles := make(map[string]string)
 	for _, candidate := range candidates {
+		if language := sourceFileLanguage(candidate.summary.Path); language != "" {
+			module.LanguageSourceFiles[normalizeTopologyFilePath(candidate.summary.Path)] = language
+		}
 		if byRoot[candidate.sourceRoot] == nil {
 			byRoot[candidate.sourceRoot] = make(map[string][]cppCandidate)
 		}

@@ -222,6 +222,11 @@ func (m Model) handleKeyEnter() (tea.Model, tea.Cmd, bool) {
 		return m, copyCmd(topologyPromptKind, m.schemaA), true
 
 	case stateContextReady:
+		for _, meta := range m.metadata {
+			if meta.RequiresExport {
+				return m, savePromptCmd(codeContextPromptKind, m.schemaB), true
+			}
+		}
 		return m, copyCmd(codeContextPromptKind, m.schemaB), true
 
 	case stateContextWarning:
@@ -525,7 +530,7 @@ func (m Model) forwardKeyToInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.goalInputLastRuneAt = time.Now()
 				return m, tea.Tick(goalPasteFlushDelay, func(time.Time) tea.Msg { return goalPasteFlushMsg{} })
 			}
-			m.goalInput, cmd = m.goalInput.Update(msg)
+			m.goalInput, cmd = updateUnicodeTextarea(m.goalInput, msg)
 			m.enforceGoalByteLimit(pastedKeyMsg(msg))
 			m.resizeGoalEditor()
 			m.refreshCompletionCandidate()
@@ -550,7 +555,7 @@ func (m Model) forwardKeyToInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 	case stateWaitingForExtractions, stateWaitingForCode:
-		m.paste, cmd = m.paste.Update(msg)
+		m.paste, cmd = updateUnicodeTextarea(m.paste, msg)
 		if pastedKeyMsg(msg) {
 			// Auto-submit on paste so the user does not have to press Enter.
 			return m.submitPasteState()
@@ -568,7 +573,8 @@ func isGoalPasteInsert(msg tea.KeyMsg) bool {
 
 func goalEditorKeyFinalizesPasteCapture(msg tea.KeyMsg) bool {
 	switch msg.Type {
-	case tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown, tea.KeyHome, tea.KeyEnd:
+	case tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight, tea.KeyUp, tea.KeyDown, tea.KeyHome, tea.KeyEnd,
+		tea.KeyCtrlLeft, tea.KeyCtrlRight, tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyCtrlA, tea.KeyCtrlE, tea.KeyCtrlB, tea.KeyCtrlF, tea.KeyCtrlW, tea.KeyCtrlU, tea.KeyCtrlK:
 		return true
 	default:
 		return false
@@ -577,7 +583,8 @@ func goalEditorKeyFinalizesPasteCapture(msg tea.KeyMsg) bool {
 
 func goalEditorKeyBypassesAppRouting(msg tea.KeyMsg) bool {
 	switch msg.Type {
-	case tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight, tea.KeyHome, tea.KeyEnd:
+	case tea.KeyBackspace, tea.KeyDelete, tea.KeyLeft, tea.KeyRight, tea.KeyHome, tea.KeyEnd,
+		tea.KeyCtrlLeft, tea.KeyCtrlRight, tea.KeyCtrlHome, tea.KeyCtrlEnd, tea.KeyCtrlA, tea.KeyCtrlE, tea.KeyCtrlB, tea.KeyCtrlF, tea.KeyCtrlW, tea.KeyCtrlU, tea.KeyCtrlK:
 		return true
 	default:
 		return false
@@ -585,7 +592,7 @@ func goalEditorKeyBypassesAppRouting(msg tea.KeyMsg) bool {
 }
 
 func (m Model) goalPasteBurstLikely(msg tea.KeyMsg) bool {
-	if msg.Type != tea.KeyRunes || len(msg.Runes) != 1 || m.goalInputLastRuneAt.IsZero() {
+	if msg.Type != tea.KeyRunes || msg.Alt || len(msg.Runes) != 1 || m.goalInputLastRuneAt.IsZero() || m.goalInputCursorByteIndex() != len(m.goalInput.Value()) {
 		return false
 	}
 	return time.Since(m.goalInputLastRuneAt) < goalPasteBurstWindow

@@ -395,7 +395,7 @@ func goModulePath(goModPath string) string {
 }
 
 func isGoSourceFile(name string) bool {
-	return strings.HasSuffix(name, ".go")
+	return sourceExtensionLanguage(name) == "Go"
 }
 
 func isGoResourceFile(name string) bool {

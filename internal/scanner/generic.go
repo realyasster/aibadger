@@ -13,85 +13,25 @@ import (
 
 const maxGenericPackageFiles = 10
 
-var genericExtensionLanguages = map[string]string{
-	".go":       "Go",
-	".java":     "Java",
-	".py":       "Python",
-	".js":       "JavaScript",
-	".jsx":      "JavaScript",
-	".mjs":      "JavaScript",
-	".cjs":      "JavaScript",
-	".ts":       "TypeScript",
-	".tsx":      "TypeScript",
-	".mts":      "TypeScript",
-	".cts":      "TypeScript",
-	".cpp":      "C++",
-	".cc":       "C++",
-	".cxx":      "C++",
-	".c":        "C",
-	".rs":       "Rust",
-	".rb":       "Ruby",
-	".php":      "PHP",
-	".cs":       "C#",
-	".kt":       "Kotlin",
-	".kts":      "Kotlin",
-	".swift":    "Swift",
-	".ads":      "Ada",
-	".adb":      "Ada",
-	".ada":      "Ada",
-	".cbl":      "COBOL",
-	".cob":      "COBOL",
-	".cobol":    "COBOL",
-	".ccp":      "COBOL",
-	".cpy":      "COBOL",
-	".jcl":      "JCL",
-	".sv":       "SystemVerilog",
-	".svh":      "SystemVerilog",
-	".vhd":      "VHDL",
-	".vhdl":     "VHDL",
-	".f77":      "Fortran",
-	".f90":      "Fortran",
-	".f95":      "Fortran",
-	".f03":      "Fortran",
-	".f08":      "Fortran",
-	".fpp":      "Fortran",
-	".ftn":      "Fortran",
-	".pli":      "PL/I",
-	".pl1":      "PL/I",
-	".rpgle":    "RPG",
-	".sqlrpgle": "RPG",
-	".rpgleinc": "RPG",
-	".sqlrpg":   "RPG",
-	".clle":     "IBM CL",
-	".clp":      "IBM CL",
-	".clp38":    "IBM CL",
-	".abap":     "ABAP",
-}
+var genericIgnoredDirs = cloneExclusions(commonIgnoredDirs,
+	".idea", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", ".vscode", "__pycache__",
+	"bin", "coverage", "dist", "vendor", "venv", "out", ".next", ".nuxt", ".svelte-kit",
+	"third-party", "third_party", ".cache",
+)
 
 // GenericDetector handles projects with no specific structure (e.g., Python, simple Go, etc.)
 type GenericDetector struct {
-	Exclusions     map[string]bool
-	maxFilesPerDir int
-	maxTotalFiles  int
+	Exclusions          map[string]bool
+	maxFilesPerDir      int
+	maxTotalFiles       int
+	languageSourceFiles map[string]string
+	skipDirectory       func(string) bool
 }
 
 // NewGenericDetector creates a new GenericDetector.
 func NewGenericDetector() *GenericDetector {
 	return &GenericDetector{
-		Exclusions: cloneExclusions(commonIgnoredDirs,
-			".idea",
-			".mypy_cache",
-			".pytest_cache",
-			".ruff_cache",
-			".venv",
-			".vscode",
-			"__pycache__",
-			"bin",
-			"coverage",
-			"dist",
-			"vendor",
-			"venv",
-		),
+		Exclusions: cloneExclusions(genericIgnoredDirs),
 	}
 }
 
@@ -123,8 +63,11 @@ func (d *GenericDetector) Detect(root string) ([]model.Module, error) {
 		return nil, err
 	}
 
-	// Guess language
-	module.Language = d.guessLanguage(extCounts)
+	module.LanguageSourceFiles = d.languageSourceFiles
+	module.Language = dominantLanguage(sourceWeights(module.LanguageSourceFiles))
+	if module.Language == "" {
+		module.Language = "Generic"
+	}
 
 	// Convert packages map to slice
 	for _, pkg := range packages {
@@ -150,6 +93,8 @@ func (d *GenericDetector) Detect(root string) ([]model.Module, error) {
 // walkFiles supplies the bounded, deterministic traversal shared by the full
 // Generic fallback and mixed-repository source coverage.
 func (d *GenericDetector) walkFiles(root string, visit func(string, os.DirEntry, os.FileInfo)) error {
+	d.languageSourceFiles = make(map[string]string)
+	totalEntries := 0
 	var perDirFiles map[string]int
 	if d.maxFilesPerDir > 0 {
 		perDirFiles = make(map[string]int)
@@ -164,6 +109,13 @@ func (d *GenericDetector) walkFiles(root string, visit func(string, os.DirEntry,
 		if err != nil {
 			return nil
 		}
+		totalEntries++
+		if totalEntries > defaults.MaxTotalScanFiles {
+			return filepath.SkipAll
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
 		if d.maxFilesPerDir > 0 {
 			dir := filepath.Dir(path)
 			perDirFiles[dir]++
@@ -175,7 +127,7 @@ func (d *GenericDetector) walkFiles(root string, visit func(string, os.DirEntry,
 			}
 		}
 		if entry.IsDir() {
-			if shouldSkipDir(entry.Name(), d.Exclusions) {
+			if path != root && (shouldSkipDir(strings.ToLower(entry.Name()), d.Exclusions) || strings.HasPrefix(strings.ToLower(entry.Name()), "cmake-build-") || d.skipDirectory != nil && d.skipDirectory(path)) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -186,6 +138,9 @@ func (d *GenericDetector) walkFiles(root string, visit func(string, os.DirEntry,
 		}
 		info, infoErr := entry.Info()
 		if infoErr == nil {
+			if language := programmingSourceLanguage(root, path); language != "" {
+				d.languageSourceFiles[normalizeTopologyFilePath(relativePath(root, path))] = language
+			}
 			visit(path, entry, info)
 		}
 		return nil
@@ -265,7 +220,7 @@ func getOrCreateGenericPackage(packages map[string]*model.Package, dir string) *
 func (d *GenericDetector) guessLanguage(counts map[string]int) string {
 	languageCounts := make(map[string]int)
 	for ext, count := range counts {
-		if language, ok := genericExtensionLanguages[strings.ToLower(ext)]; ok {
+		if language, ok := sourceExtensionLanguages[strings.ToLower(ext)]; ok {
 			languageCounts[language] += count
 		}
 	}

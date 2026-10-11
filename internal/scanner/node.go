@@ -22,7 +22,7 @@ type NodeDetector struct {
 // NewNodeDetector returns a new Node detector.
 func NewNodeDetector() *NodeDetector {
 	return &NodeDetector{
-		Exclusions: cloneExclusions(commonIgnoredDirs, "dist"),
+		Exclusions: cloneExclusions(NewGenericDetector().Exclusions),
 	}
 }
 
@@ -44,12 +44,16 @@ func (n *NodeDetector) Detect(root string) ([]model.Module, error) {
 		switch filepath.Base(marker) {
 		case "package.json":
 			packageJSON, ok := n.readPackageJSON(marker)
-			if !ok || !packageJSON.isEligibleModuleRoot() {
+			if !ok {
 				continue
 			}
 
 			relPath := relativePath(root, modulePath)
 			if seenModules[relPath] {
+				continue
+			}
+			module := n.analyzeModule(root, relPath, packageJSON)
+			if !packageJSON.isEligibleModuleRoot() && module.FileCount == 0 && !util.FileExists(filepath.Join(modulePath, "tsconfig.json")) {
 				continue
 			}
 
@@ -58,7 +62,7 @@ func (n *NodeDetector) Detect(root string) ([]model.Module, error) {
 			}
 
 			seenModules[relPath] = true
-			modules = append(modules, n.analyzeModule(root, relPath, packageJSON))
+			modules = append(modules, module)
 		case "pnpm-workspace.yaml":
 			for _, workspaceRoot := range n.pnpmWorkspaceModuleRoots(root, modulePath) {
 				workspaceRoots[workspaceRoot] = true
@@ -102,19 +106,13 @@ func (n *NodeDetector) analyzeModule(projectRoot, relPath string, packageJSON no
 		module.Language = "TypeScript"
 	}
 
-	for _, rootName := range []string{"src", "app", "lib", "server", "test", "tests"} {
-		sr, ok := n.findSourceRoot(projectRoot, fullModulePath, rootName)
-		if !ok {
-			continue
-		}
-		module.SourceRoots = append(module.SourceRoots, sr)
-		module.FileCount += sr.FileCount
-		limit := moduleTopFileLimit(module.Path, maxPackageTopFiles)
-		for _, pkg := range sr.Packages {
-			for _, file := range pkg.TopFiles {
-				module.TopFiles = addTopFile(module.TopFiles, file, limit)
-			}
-		}
+	n.scanModuleSources(&module, projectRoot, fullModulePath)
+	if language := dominantLanguage(sourceWeights(module.LanguageSourceFiles)); language != "" {
+		module.Language = language
+	} else if packageJSON.TypeScript || util.FileExists(filepath.Join(fullModulePath, "tsconfig.json")) {
+		module.Language = "TypeScript"
+	} else if module.FileCount > 0 {
+		module.Language = "Unknown"
 	}
 
 	n.addRootOverviewPackage(&module, projectRoot, fullModulePath, packageJSON)
@@ -405,8 +403,52 @@ func (n *NodeDetector) addRootOverviewPackage(module *model.Module, projectRoot,
 		})
 	}
 
-	module.SourceRoots[0].Packages = append(module.SourceRoots[0].Packages, overview)
-	module.SourceRoots[0].FileCount += overview.FileCount
+	merged := false
+	for i := range module.SourceRoots {
+		for j := range module.SourceRoots[i].Packages {
+			pkg := &module.SourceRoots[i].Packages[j]
+			if pkg.Path != module.Path {
+				continue
+			}
+			seen := make(map[string]bool)
+			for _, file := range overview.TopFiles {
+				seen[file.Path] = true
+			}
+			duplicates := 0
+			for _, file := range pkg.TopFiles {
+				if seen[file.Path] {
+					duplicates++
+					continue
+				}
+				overview.TopFiles = append(overview.TopFiles, file)
+			}
+			overview.FileCount += pkg.FileCount - duplicates
+			sort.SliceStable(overview.TopFiles, func(i, j int) bool {
+				left, right := overview.TopFiles[i], overview.TopFiles[j]
+				if nodeOverviewPriority(left.Path) != nodeOverviewPriority(right.Path) {
+					return nodeOverviewPriority(left.Path) < nodeOverviewPriority(right.Path)
+				}
+				if left.Size != right.Size {
+					return left.Size > right.Size
+				}
+				return left.Path < right.Path
+			})
+			if len(overview.TopFiles) > maxNodeRootOverviewFiles {
+				overview.TopFiles = overview.TopFiles[:maxNodeRootOverviewFiles]
+			}
+			module.SourceRoots[i].FileCount += overview.FileCount - pkg.FileCount
+			*pkg = overview
+			merged = true
+			break
+		}
+		if merged {
+			break
+		}
+	}
+	if !merged {
+		module.SourceRoots[0].Packages = append(module.SourceRoots[0].Packages, overview)
+		module.SourceRoots[0].FileCount += overview.FileCount
+	}
 	limit := moduleTopFileLimit(module.Path, maxPackageTopFiles)
 	for _, file := range overview.TopFiles {
 		module.TopFiles = addTopFile(module.TopFiles, file, limit)
@@ -416,7 +458,7 @@ func (n *NodeDetector) addRootOverviewPackage(module *model.Module, projectRoot,
 func (n *NodeDetector) rootOverviewPackage(projectRoot, fullModulePath string, packageJSON nodePackageJSON) model.Package {
 	pkg := model.Package{
 		Name: "root",
-		Path: "",
+		Path: relativePath(projectRoot, fullModulePath),
 	}
 
 	candidates := append([]string{"package.json"}, nodeRootConfigCandidates(fullModulePath)...)
@@ -713,15 +755,7 @@ func firstNodeOverviewFileUnderDir(fullModulePath, relDir string) (string, bool)
 }
 
 func isNodeOverviewFile(name string) bool {
-	if isNodeSourceFile(name) {
-		return true
-	}
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".vue":
-		return true
-	default:
-		return false
-	}
+	return isNodeSourceFile(name)
 }
 
 func obviousScriptPathTokens(script string) []string {
@@ -763,13 +797,7 @@ func looksLikeNodePathToken(token string) bool {
 	if strings.Contains(token, "/") || strings.Contains(token, "\\") {
 		return true
 	}
-	ext := strings.ToLower(filepath.Ext(token))
-	switch ext {
-	case ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts":
-		return true
-	default:
-		return false
-	}
+	return isNodeSourceFile(token)
 }
 
 func normalizeRelativePath(candidate string) (string, bool) {
@@ -857,12 +885,8 @@ func (n *NodeDetector) scanSourceRoot(sr *model.SourceRoot, projectRoot string) 
 }
 
 func isNodeSourceFile(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts":
-		return true
-	default:
-		return false
-	}
+	language := sourceExtensionLanguage(name)
+	return language == "JavaScript" || language == "TypeScript" || strings.EqualFold(filepath.Ext(name), ".vue")
 }
 
 func recordNodeFile(packageMap map[string]*model.Package, fullRootPath, projectRoot, path, name string, size int64) {

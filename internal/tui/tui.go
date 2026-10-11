@@ -182,7 +182,9 @@ func RunWithConfig(root string, cfg Config) error {
 	if err := engine.CheckDisabledAndExit(root, os.Stdout); err != nil {
 		return nil
 	}
-	_, err := tea.NewProgram(NewModel(root, cfg), tea.WithAltScreen(), tea.WithFPS(tuiRendererFPS)).Run()
+	m := NewModel(root, cfg)
+	m.startupWarnings = append(m.startupWarnings, terminalUnicodeWarnings()...)
+	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFPS(tuiRendererFPS)).Run()
 	return err
 }
 
@@ -431,7 +433,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = warningMessage(fmt.Sprintf("%s clipboard copy failed: %v", msg.kind, msg.err))
 			return m, savePromptAfterClipboardFailureCmd(msg.kind, msg.text, msg.err)
 		}
-		m.status = successMessage(fmt.Sprintf("%s copied to clipboard.", msg.kind))
+		m.status = successMessage(fmt.Sprintf("%s copied to clipboard. Byte-for-byte readback verified.", msg.kind))
 		return m.advanceAfterCopy(msg.kind, false)
 	case savePromptDoneMsg:
 		if msg.destination == promptFileDestinationDownloads {
@@ -495,6 +497,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.metadata = msg.metadata
 		m.state = stateContextReady
 		m.status = neutralMessage(workflow.ContextReadyStatus())
+		for _, meta := range m.metadata {
+			if meta.Status == "Partial" {
+				m.status = warningMessage("Context includes partial spans or asset summaries. Use FILE for complete text files.")
+				break
+			}
+		}
 		m.err = nil
 		return m, nil
 	case writeDoneMsg:

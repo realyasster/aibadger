@@ -1,14 +1,14 @@
 package protocol
 
 // This file owns prompt formatting for project topology and extracted code
-// context, including truncation metadata and prompt instruction text.
+// context, including integrity metadata and prompt instruction text.
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/PVRLabs/aibadger/internal/defaults"
 	"github.com/PVRLabs/aibadger/internal/filegroups"
@@ -18,9 +18,9 @@ import (
 // Formatter handles Schema A and B generation.
 type Formatter struct {
 	MaxPackages            int // 0 means no limit
-	MaxContextFileBytes    int // 0 means no limit
+	MaxContextFileBytes    int // File-export threshold; <= 0 disables
 	MaxTopologyPromptBytes int // 0 means no limit
-	MaxPromptTwoBytes      int // 0 means no limit
+	MaxPromptTwoBytes      int // File-export threshold; <= 0 disables
 	Focus                  Focus
 	Instructions           PromptInstructions
 	customInstructions     bool
@@ -427,31 +427,35 @@ func (f *Formatter) GenerateSchemaB(t *model.ProjectTopology, extractions []Extr
 	})
 }
 
-// generateExtractedContext applies the same per-file trimming and total byte
-// target to code context and supplemental review context. Fixed framing stays
-// intact even when it alone exceeds the target.
+// generateExtractedContext never changes or drops extracted bytes. Limits are
+// delivery thresholds: callers should offer file export when RequiresExport is set.
 func (f *Formatter) generateExtractedContext(extractions []ExtractionResult, build func([]ExtractionResult, []ExtractionMetadata) string) (string, []ExtractionMetadata) {
-	var metadata []ExtractionMetadata
-	processed := make([]ExtractionResult, 0, len(extractions))
+	metadata := make([]ExtractionMetadata, 0, len(extractions))
 	for _, extraction := range extractions {
-		meta := ExtractionMetadata{Path: extraction.Path, OriginalSize: len(extraction.Content)}
-		content := extraction.Content
-		if f.MaxContextFileBytes > 0 && len(content) > f.MaxContextFileBytes {
-			content = f.trimContent(content, f.MaxContextFileBytes)
-			meta.Truncated = true
+		status, reason := "Partial", "Selected span; use FILE for the original file"
+		if extraction.FullFile {
+			status, reason = "Full", ""
 		}
-		processed = append(processed, ExtractionResult{Path: extraction.Path, Content: content, FullFile: extraction.FullFile})
+		meta := ExtractionMetadata{
+			Path: extraction.Path, OriginalSize: len(extraction.Content),
+			TransferredSize: len(extraction.Content), SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte(extraction.Content))),
+			Status: status, Reason: reason,
+			RequiresExport: f.MaxContextFileBytes > 0 && len(extraction.Content) > f.MaxContextFileBytes,
+		}
+		if extraction.SourceSHA256 != "" || extraction.SourceSize > 0 {
+			meta.OriginalSize, meta.SourceSHA256 = extraction.SourceSize, extraction.SourceSHA256
+		} else if status == "Full" {
+			meta.SourceSHA256 = meta.SHA256
+		}
 		metadata = append(metadata, meta)
 	}
-	for {
-		body := build(processed, metadata)
-		if f.MaxPromptTwoBytes <= 0 || len(body) <= f.MaxPromptTwoBytes || len(processed) == 0 {
-			return body, metadata
+	body := build(extractions, metadata)
+	if f.MaxPromptTwoBytes > 0 && len(body) > f.MaxPromptTwoBytes {
+		for i := range metadata {
+			metadata[i].RequiresExport = true
 		}
-		last := len(processed) - 1
-		metadata[last].Dropped = true
-		processed = processed[:last]
 	}
+	return body, metadata
 }
 
 // GenerateReviewContinuation renders only supplemental context for an
@@ -466,10 +470,10 @@ func (f *Formatter) GenerateReviewContinuation(extractions []ExtractionResult, r
 		sb.WriteString("[CONTEXT]\n")
 		for i, extraction := range items {
 			label := "Extracted Span"
-			if strings.HasPrefix(extraction.Content, "Binary file: ") {
-				label = "Binary Summary"
-			} else if extraction.FullFile {
+			if extraction.FullFile {
 				label = "Full File"
+			} else if strings.HasPrefix(extraction.Content, "Binary file: ") {
+				label = "Binary Summary"
 			}
 			if metadata[i].Truncated {
 				label += ", Truncated"
@@ -488,10 +492,10 @@ func (f *Formatter) buildSchemaBBody(t *model.ProjectTopology, extractions []Ext
 	sb.WriteString("\n[CONTEXT]\n")
 	for i, e := range extractions {
 		label := "Extracted Span"
-		if strings.HasPrefix(e.Content, "Binary file: ") {
-			label = "Binary Summary"
-		} else if e.FullFile {
+		if e.FullFile {
 			label = "Full File"
+		} else if strings.HasPrefix(e.Content, "Binary file: ") {
+			label = "Binary Summary"
 		}
 		truncated := i < len(metadata) && metadata[i].Truncated
 		if truncated {
@@ -513,36 +517,6 @@ func shouldPrintPrimary(t *model.ProjectTopology) bool {
 	return len(t.Languages) > 1 && t.PrimaryLanguage != "" && t.PrimaryLanguage != "Unknown"
 }
 
-func (f *Formatter) trimContent(content string, limit int) string {
-	if limit <= 0 || len(content) <= limit {
-		return content
-	}
-
-	half := limit / 2
-	start := content[:half]
-	// Use DecodeLastRuneInString to find safe boundary backward
-	for len(start) > 0 {
-		r, size := utf8.DecodeLastRuneInString(start)
-		if r != utf8.RuneError || size > 1 {
-			break
-		}
-		start = start[:len(start)-1]
-	}
-
-	end := content[len(content)-half:]
-	// Use DecodeRuneInString to find safe boundary forward
-	for len(end) > 0 {
-		r, size := utf8.DecodeRuneInString(end)
-		if r != utf8.RuneError || size > 1 {
-			break
-		}
-		end = end[size:]
-	}
-
-	truncatedBytes := len(content) - len(start) - len(end)
-	return fmt.Sprintf("%s\n... [Truncated %d bytes] ...\n%s", start, truncatedBytes, end)
-}
-
 func (f *Formatter) currentInstructions() PromptInstructions {
 	if f == nil {
 		return DefaultInstructions
@@ -561,17 +535,26 @@ func (f *Formatter) currentInstructions() PromptInstructions {
 
 // ExtractionResult stores the result of a single extraction command.
 type ExtractionResult struct {
-	Path     string
-	Content  string
-	FullFile bool
+	Path         string
+	Content      string
+	FullFile     bool
+	SourceSize   int
+	SourceSHA256 string
 }
 
-// ExtractionMetadata tracks trimming status for the TUI and sidecars.
+// ExtractionMetadata describes extraction integrity, not clipboard delivery.
+// Legacy Truncated/Dropped fields remain for API compatibility.
 type ExtractionMetadata struct {
-	Path         string
-	OriginalSize int
-	Truncated    bool // Per-file truncation happened
-	Dropped      bool // File was dropped entirely due to total limit
+	Path            string
+	OriginalSize    int
+	TransferredSize int
+	SHA256          string // Digest of extracted bytes
+	SourceSHA256    string // Digest of source bytes, when available
+	Status          string // Full, Partial, Truncated, Dropped, Excluded, Failed
+	Reason          string
+	RequiresExport  bool // Delivery threshold exceeded; all bytes are preserved
+	Truncated       bool // Per-file truncation happened
+	Dropped         bool // File was dropped entirely due to total limit
 }
 
 func formatTopFiles(packagePath string, files []model.FileSummary, heaviest model.HeaviestFile) string {

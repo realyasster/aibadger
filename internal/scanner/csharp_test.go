@@ -274,8 +274,8 @@ func TestScannerCSharpCompanionContextHasZeroLanguageWeight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if topology.PrimaryLanguage != "Go" || !reflect.DeepEqual(topology.Languages, []string{"C#", "Go"}) {
-		t.Fatalf("primary=%q languages=%v, want Go primary with C# structural presence", topology.PrimaryLanguage, topology.Languages)
+	if topology.PrimaryLanguage != "Go" || !reflect.DeepEqual(topology.Languages, []string{"Go"}) {
+		t.Fatalf("primary=%q languages=%v, want only Go source language; C# companion context has zero weight", topology.PrimaryLanguage, topology.Languages)
 	}
 }
 

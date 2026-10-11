@@ -2,12 +2,12 @@ package extractor
 
 // This file contains local span extraction and fallback-window algorithms.
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
-	braceLookaheadLimit        = 48
-	indentLookaheadLimit       = 24
-	declarationLookaheadLimit  = 24
 	wholeFileFallbackLineLimit = 24
 	wholeFileFallbackByteLimit = 4 * 1024
 	fallbackWindowBeforeLines  = 3
@@ -18,7 +18,7 @@ func (e *Extractor) extractBlock(content, cmdType, pattern string) (string, bool
 	lines := strings.Split(content, "\n")
 	startLine := findStartLine(lines, cmdType, pattern)
 	if startLine == -1 {
-		return buildFallbackWindow(content, lines, -1), len(lines) <= wholeFileFallbackLineLimit && len(content) <= wholeFileFallbackByteLimit, nil
+		return "", false, fmt.Errorf("%s pattern not found: %q", cmdType, pattern)
 	}
 
 	anchorStart := findAnchorStart(lines, startLine)
@@ -100,7 +100,7 @@ func isPythonBlockIntro(trimmed string) bool {
 }
 
 func extractBraceSpan(lines []string, startLine int) (string, bool) {
-	endLine, ok := findBraceBlockEnd(lines, startLine, braceLookaheadLimit)
+	endLine, ok := findBraceBlockEnd(lines, startLine, len(lines))
 	if !ok {
 		return "", false
 	}
@@ -108,7 +108,7 @@ func extractBraceSpan(lines []string, startLine int) (string, bool) {
 }
 
 func extractIndentSpan(lines []string, startLine int) (string, bool) {
-	endLine, ok := findIndentBlockEnd(lines, startLine, indentLookaheadLimit)
+	endLine, ok := findIndentBlockEnd(lines, startLine, len(lines))
 	if !ok {
 		return "", false
 	}
@@ -116,7 +116,7 @@ func extractIndentSpan(lines []string, startLine int) (string, bool) {
 }
 
 func extractDeclarationSpan(lines []string, startLine int) (string, bool) {
-	endLine, ok := findDeclarationSpanEnd(lines, startLine, declarationLookaheadLimit)
+	endLine, ok := findDeclarationSpanEnd(lines, startLine, len(lines))
 	if !ok {
 		return "", false
 	}
@@ -366,12 +366,11 @@ func buildLineRange(lines []string, startLine, endLine int) string {
 		endLine = len(lines) - 1
 	}
 
-	var result strings.Builder
-	for i := startLine; i <= endLine; i++ {
-		result.WriteString(lines[i])
-		result.WriteString("\n")
+	result := strings.Join(lines[startLine:endLine+1], "\n")
+	if endLine < len(lines)-1 {
+		result += "\n"
 	}
-	return result.String()
+	return result
 }
 
 func isUsefulSpan(span string) bool {

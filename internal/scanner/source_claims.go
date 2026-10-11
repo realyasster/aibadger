@@ -57,7 +57,7 @@ func newSemanticSourceOwnership(projectRoot string, modules []model.Module) sema
 		case "Python":
 			claim.exclusions = NewPythonDetector().Exclusions
 			claim.areas = pythonSourceClaimAreas(projectRoot)
-		case "JavaScript", "TypeScript":
+		case "JavaScript", "TypeScript", "Vue":
 			detector := NewNodeDetector()
 			claim.exclusions = detector.Exclusions
 			claim.areas, claim.exactPaths = nodeSourceClaimAreas(detector, projectRoot, moduleRoot)
@@ -124,6 +124,9 @@ func (c semanticSourceClaim) owns(projectRoot, rel string) bool {
 		if !pathInClaimArea(rel, area) {
 			continue
 		}
+		if (c.language == "JavaScript" || c.language == "TypeScript" || c.language == "Vue") && crossesNestedNodeProject(projectRoot, c.moduleRoot, rel) {
+			return false
+		}
 		if c.language == "C#" && crossesNestedCSharpProject(projectRoot, c.moduleRoot, rel) {
 			return false
 		}
@@ -143,10 +146,10 @@ func sourceFileMatchesLanguage(language, name string) bool {
 		return isJavaSourceFile(name)
 	case "Python":
 		return isPythonSourceFile(name)
-	case "JavaScript", "TypeScript":
+	case "JavaScript", "TypeScript", "Vue":
 		return isNodeSourceFile(name)
 	case "C#":
-		return strings.EqualFold(filepath.Ext(name), ".cs")
+		return sourceExtensionLanguage(name) == "C#"
 	case "C++":
 		return isAcceptedCppFile(name) && !strings.EqualFold(name, "CMakeLists.txt")
 	default:
@@ -192,10 +195,7 @@ func pythonSourceClaimAreas(projectRoot string) []sourceClaimArea {
 }
 
 func nodeSourceClaimAreas(detector *NodeDetector, projectRoot, moduleRoot string) ([]sourceClaimArea, map[string]bool) {
-	areas := make([]sourceClaimArea, 0, 6)
-	for _, name := range []string{"src", "app", "lib", "server", "test", "tests"} {
-		areas = append(areas, sourceClaimArea{root: joinRelativePath(moduleRoot, name), recursive: true})
-	}
+	areas := []sourceClaimArea{{root: moduleRoot, recursive: true}}
 
 	exact := make(map[string]bool)
 	fullModulePath := filepath.Join(projectRoot, moduleRoot)
@@ -332,8 +332,8 @@ func classifyGenericSourceCandidate(projectRoot, path string) (string, bool) {
 		return "", false
 	}
 	name := filepath.Base(rel)
-	language, ok := genericExtensionLanguages[strings.ToLower(filepath.Ext(name))]
-	if !ok || shouldOmitFile(projectRoot, full, name) || isUnderIgnoredDir(projectRoot, full, NewGenericDetector().Exclusions) || (language == "C#" && isUnderCSharpObjDir(rel)) {
+	language := sourceFileLanguage(full)
+	if language == "" || shouldOmitFile(projectRoot, full, name) || isUnderIgnoredDir(projectRoot, full, genericIgnoredDirs) || (language == "C#" && isUnderCSharpObjDir(rel)) {
 		return "", false
 	}
 	if filekind.Classify(full) != model.FileKindSource || isIdentityManifest(name) || isOperationalConfigFile(name) || isTextControlFile(name) {

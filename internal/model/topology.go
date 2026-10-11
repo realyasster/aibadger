@@ -49,6 +49,9 @@ type Module struct {
 	Coverage    bool          `json:"-"`        // Internal source-coverage group, not a structural module.
 	// LanguageSourceCount excludes companion context from synthetic coverage weighting.
 	LanguageSourceCount int `json:"-"`
+	// Accepted source paths and languages, independent of bounded summaries.
+	// Internal only: permits exact mixed-language weights and global de-duplication.
+	LanguageSourceFiles map[string]string `json:"-"`
 }
 
 // SourceRoot represents a directory containing source files (e.g., src/main/java).

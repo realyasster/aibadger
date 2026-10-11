@@ -363,11 +363,11 @@ func TestNodeDetectorRecognizesCommonSourceRoots(t *testing.T) {
 			t.Fatalf("module.SourceRoots = %+v, missing %s", module.SourceRoots, root)
 		}
 	}
-	if hasSourceRoot(module, "scripts") {
-		t.Fatalf("module.SourceRoots = %+v, should not include scripts", module.SourceRoots)
+	if !hasSourceRoot(module, "scripts") {
+		t.Fatalf("module.SourceRoots = %+v, missing additional scripts source", module.SourceRoots)
 	}
-	if module.FileCount != 4 {
-		t.Fatalf("module.FileCount = %d, want 4 source files from recognized roots", module.FileCount)
+	if module.FileCount != 5 {
+		t.Fatalf("module.FileCount = %d, want all five source files", module.FileCount)
 	}
 	if !hasPackage(module, "src") {
 		t.Fatalf("module packages missing src root package")
@@ -558,13 +558,14 @@ func TestNodeDetectorAvoidsFrameworkSpecificRootContracts(t *testing.T) {
 	if !hasSourceRoot(module, "src") {
 		t.Fatalf("module.SourceRoots = %+v, missing src root", module.SourceRoots)
 	}
-	for _, forbidden := range []string{"pages", "components", "hooks", "apps", "libs"} {
-		if hasSourceRoot(module, forbidden) {
-			t.Fatalf("module.SourceRoots = %+v, should not include framework-specific root %s", module.SourceRoots, forbidden)
+	for _, name := range []string{"pages", "components", "hooks", "apps", "libs"} {
+		root := findSourceRoot(module, name)
+		if root == nil || root.Role != "Additional Source" {
+			t.Fatalf("%s source root = %+v, want framework-neutral Additional Source", name, root)
 		}
 	}
-	if module.FileCount != 1 {
-		t.Fatalf("module.FileCount = %d, want only files under broad supported roots", module.FileCount)
+	if module.FileCount != 6 {
+		t.Fatalf("module.FileCount = %d, want all six source files", module.FileCount)
 	}
 	if !hasPackage(module, filepath.Join("src", "pages")) {
 		t.Fatalf("module packages = %+v, want src/pages package from supported src root", module.SourceRoots)

@@ -29,9 +29,9 @@ type Config struct {
 	LargeProjectFileThreshold int
 	LargePromptByteThreshold  int
 	TruncatedMaxPackages      int
-	MaxContextFileBytes       int    // 0 uses the default; negative disables per-file trimming.
+	MaxContextFileBytes       int    // File-export threshold; 0 uses the default, negative disables.
 	MaxTopologyPromptBytes    int    // 0 uses the default; negative disables Prompt 1 byte target.
-	MaxPromptTwoBytes         int    // 0 uses the default; negative disables Prompt 2 trimming.
+	MaxPromptTwoBytes         int    // Prompt 2 file-export threshold; 0 uses the default, negative disables.
 	SchemaAConstraint         string // Optional: overrides Prompt 1 instructions
 	SchemaBConstraint         string // Optional: overrides Prompt 2 instructions
 	WhitespaceMode            string // "smart" (default), "exact", or "ignore"

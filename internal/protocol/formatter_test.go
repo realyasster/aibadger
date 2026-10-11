@@ -1000,17 +1000,8 @@ func TestGenerateSchemaBTrimming(t *testing.T) {
 	// Now set limit to 10
 	formatter.MaxContextFileBytes = 10
 	out, meta = formatter.GenerateSchemaB(topology, extractions, "query")
-	if !meta[0].Truncated {
-		t.Error("Expected truncation for 19 bytes with limit 10")
-	}
-	if !strings.Contains(out, "--- File: f1 (Extracted Span, Truncated) ---") {
-		t.Fatalf("expected truncated Prompt 2 header, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--- End File (TRUNCATED) ---") {
-		t.Fatalf("expected truncated Prompt 2 footer, got:\n%s", out)
-	}
-	if !strings.Contains(out, "[Truncated") {
-		t.Error("Expected truncation marker")
+	if meta[0].Truncated || !meta[0].RequiresExport || !strings.Contains(out, content) {
+		t.Fatal("over-limit content must remain intact and require export")
 	}
 	if !utf8.ValidString(out) {
 		t.Fatal("Expected truncated output to remain valid UTF-8")
@@ -1058,14 +1049,11 @@ func TestGenerateSchemaBMarksTruncatedFullFileHeader(t *testing.T) {
 		{Path: "full.go", Content: "package full file content", FullFile: true},
 	}, "query")
 
-	if !meta[0].Truncated {
-		t.Fatal("expected full file metadata to be marked truncated")
+	if meta[0].Truncated || !meta[0].RequiresExport || meta[0].Status != "Full" {
+		t.Fatalf("unexpected integrity metadata: %+v", meta[0])
 	}
-	if !strings.Contains(out, "--- File: full.go (Full File, Truncated) ---") {
-		t.Fatalf("expected truncated full-file Prompt 2 header, got:\n%s", out)
-	}
-	if !strings.Contains(out, "--- End File (TRUNCATED) ---") {
-		t.Fatalf("expected truncated full-file Prompt 2 footer, got:\n%s", out)
+	if !strings.Contains(out, "--- File: full.go (Full File) ---\npackage full file content\n--- End File ---") {
+		t.Fatalf("full file changed: %s", out)
 	}
 }
 
@@ -1129,14 +1117,8 @@ func TestGenerateSchemaBTotalDropping(t *testing.T) {
 
 	out, meta := formatter.GenerateSchemaB(topology, extractions, query)
 
-	if !strings.Contains(out, "Active Extractions: 1 files") {
-		t.Errorf("Expected 1 file to be dropped, got: %s", out)
-	}
-	if !meta[1].Dropped {
-		t.Error("Expected second file to be marked as dropped")
-	}
-	if !strings.Contains(out, "f1") || strings.Contains(out, "f2") {
-		t.Error("Expected f1 to be present and f2 to be dropped")
+	if !strings.Contains(out, "Active Extractions: 2 files") || !strings.Contains(out, extractions[1].Content) || meta[1].Dropped || !meta[1].RequiresExport {
+		t.Fatal("all files must be preserved above the total threshold")
 	}
 }
 
@@ -1156,11 +1138,8 @@ func TestGenerateSchemaBTotalDroppingRespectsFinalSize(t *testing.T) {
 	}
 
 	out, meta := formatter.GenerateSchemaB(topology, extractions, query)
-	if len(out) > formatter.MaxPromptTwoBytes {
-		t.Fatalf("schema size = %d, want <= %d", len(out), formatter.MaxPromptTwoBytes)
-	}
-	if !meta[1].Dropped {
-		t.Fatal("Expected second file to be dropped")
+	if len(out) <= formatter.MaxPromptTwoBytes || meta[1].Dropped || !meta[1].RequiresExport || !strings.Contains(out, extractions[1].Content) {
+		t.Fatal("threshold must request export, not remove bytes")
 	}
 }
 
@@ -1183,10 +1162,10 @@ func TestGenerateSchemaBTotalDroppingHandlesDuplicatePaths(t *testing.T) {
 	if meta[0].Dropped {
 		t.Fatal("Expected first duplicate path extraction to remain active")
 	}
-	if !meta[1].Dropped {
-		t.Fatal("Expected second duplicate path extraction to be dropped")
+	if meta[1].Dropped || !meta[1].RequiresExport {
+		t.Fatal("duplicate path extractions must be retained")
 	}
-	if !strings.Contains(out, "keep me") || strings.Contains(out, "drop me") {
+	if !strings.Contains(out, "keep me") || !strings.Contains(out, extractions[1].Content) {
 		t.Fatalf("duplicate path output kept wrong content:\n%s", out)
 	}
 }
@@ -1231,28 +1210,13 @@ func TestFormatterCustomInstructions(t *testing.T) {
 	}
 }
 
-func TestTrimContentRetainsAtMostLimitBytes(t *testing.T) {
+func TestReviewContinuationPreservesOverLimitBytes(t *testing.T) {
 	f := NewFormatter()
-	const limit = 50 * 1024
-	const inputSize = 60 * 1024
-
-	// Use a character that does not appear in framing or the marker.
-	input := strings.Repeat("z", inputSize)
-	trimmed := f.trimContent(input, limit)
-
-	if !strings.Contains(trimmed, "... [Truncated") {
-		t.Fatal("trimContent should include a truncation marker")
-	}
-	// Count the retained original content (the 'z' characters).
-	retained := strings.Count(trimmed, "z")
-	if retained > limit {
-		t.Fatalf("trimmed retains %d bytes of original content, want <= %d", retained, limit)
-	}
-	if retained == 0 {
-		t.Fatal("trimmed content should retain non-zero original content")
-	}
-	if len(trimmed) >= inputSize {
-		t.Fatal("trimmed output should be smaller than input")
+	f.MaxContextFileBytes, f.MaxPromptTwoBytes = 10, 10
+	input := strings.Repeat("\tş  \r\n\r\n", 10000) + "no final newline"
+	out, meta := f.GenerateReviewContinuation([]ExtractionResult{{Path: "large.txt", Content: input, FullFile: true}}, "")
+	if !strings.Contains(out, input) || len(meta) != 1 || !meta[0].RequiresExport || meta[0].Dropped || meta[0].Truncated {
+		t.Fatal("review continuation must retain all bytes above both thresholds")
 	}
 }
 
@@ -1266,23 +1230,14 @@ func TestGenerateSchemaBPerFileTruncationMetadataAndHeaders(t *testing.T) {
 
 	out, meta := formatter.GenerateSchemaB(&model.ProjectTopology{}, extractions, "query")
 
-	if !meta[0].Truncated {
-		t.Fatal("expected file above 50 KiB to be truncated")
+	if meta[0].Truncated || !meta[0].RequiresExport {
+		t.Fatal("expected export without truncation above 50 KiB")
 	}
 	if meta[0].OriginalSize != len(large) {
 		t.Fatalf("OriginalSize = %d, want %d", meta[0].OriginalSize, len(large))
 	}
-	if !strings.Contains(out, "--- File: f1 (Extracted Span, Truncated) ---") {
-		t.Fatal("expected truncated file header in output")
-	}
-	if !strings.Contains(out, "--- End File (TRUNCATED) ---") {
-		t.Fatal("expected TRUNCATED footer in output")
-	}
-	if !strings.Contains(out, "[Truncated") {
-		t.Fatal("expected truncation marker in output")
-	}
-	if len(out) >= len(large) {
-		t.Fatal("output should be smaller than original 60 KiB content")
+	if !strings.Contains(out, large) || strings.Contains(out, "(TRUNCATED)") || meta[0].TransferredSize != len(large) {
+		t.Fatal("all original bytes must be present")
 	}
 }
 
@@ -1321,14 +1276,11 @@ func TestGenerateSchemaBThreeLargeFilesDroppedWhenExceedBudget(t *testing.T) {
 
 	out, meta := formatter.GenerateSchemaB(&model.ProjectTopology{}, extractions, "query")
 
-	if len(out) > formatter.MaxPromptTwoBytes {
-		t.Fatalf("output size = %d, want <= %d", len(out), formatter.MaxPromptTwoBytes)
+	if len(out) <= formatter.MaxPromptTwoBytes || meta[2].Dropped || !meta[2].RequiresExport {
+		t.Fatal("large output must remain intact and require export")
 	}
-	if !meta[2].Dropped {
-		t.Fatal("expected at least the last file to be dropped")
-	}
-	if !strings.Contains(out, "f1") || strings.Contains(out, "f3") {
-		t.Fatal("expected f1 kept and f3 dropped")
+	if strings.Count(out, content) != 3 {
+		t.Fatal("all three files must be present")
 	}
 }
 
@@ -1480,9 +1432,8 @@ func TestGenerateSchemaBFixedContentOverBudgetPreservesFraming(t *testing.T) {
 	if len(out) <= formatter.MaxPromptTwoBytes {
 		t.Fatal("expected output to exceed the tiny target since fixed framing alone overflows")
 	}
-	// The extraction must be dropped since framing alone exceeds budget.
-	if !meta[0].Dropped {
-		t.Fatal("expected the extraction to be dropped when framing overflows")
+	if meta[0].Dropped || !meta[0].RequiresExport {
+		t.Fatal("framing overflow must request export, not drop files")
 	}
 	// Fixed sections must remain.
 	if !strings.Contains(out, "[TASK]") || !strings.Contains(out, "[OUTPUT CONSTRAINT]") {
@@ -1500,7 +1451,7 @@ func TestGenerateSchemaBFixedContentOverBudgetPreservesFraming(t *testing.T) {
 		t.Fatal("expected [CONTEXT] section header")
 	}
 	rest := out[ctxIdx:]
-	if strings.Contains(rest, "--- File:") {
-		t.Fatal("no file blocks should appear in context when all extractions are dropped")
+	if !strings.Contains(rest, content) {
+		t.Fatal("file content must survive framing overflow")
 	}
 }

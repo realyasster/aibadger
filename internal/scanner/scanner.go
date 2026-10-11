@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -74,6 +75,7 @@ func (s *Scanner) Scan() (*model.ProjectTopology, error) {
 	// own so normal language weighting and finalization can consume it.
 	usedGenericFallback := false
 	var projectContext []projectContextCandidate
+	supplementalSources := make(map[string]string)
 	if len(topology.Modules) == 0 {
 		det := NewGenericDetector()
 		if s.MaxFilesPerDirectory > 0 {
@@ -94,15 +96,15 @@ func (s *Scanner) Scan() (*model.ProjectTopology, error) {
 		if coverageErr == nil {
 			topology.Modules = append(topology.Modules, coverage...)
 			projectContext = contextCandidates
+			for path, language := range det.languageSourceFiles {
+				fullPath := filepath.Join(s.ProjectRoot, path)
+				if !ownership.Owns(fullPath) && !ownership.ownsWebResource(fullPath) {
+					supplementalSources[path] = language
+				}
+			}
 		}
 	}
-	languageWeights := sourceLanguageWeightsFromModules(topology.Modules, s.ProjectRoot)
-	if csharpDetector.languageSourceCount > 0 {
-		languageWeights["C#"] += int64(csharpDetector.languageSourceCount)
-	}
-	if cppDetector.languageSourceCount > 0 {
-		languageWeights["C++"] += int64(cppDetector.languageSourceCount)
-	}
+	languageWeights := sourceLanguageWeightsWithSupplement(topology.Modules, s.ProjectRoot, supplementalSources)
 
 	if !usedGenericFallback {
 		docs, docsErr := scanDocs(s.ProjectRoot)

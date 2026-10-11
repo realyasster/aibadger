@@ -21,13 +21,7 @@ var commonIgnoredDirs = map[string]bool{
 
 const maxInitialMarkerDiscoveryDepth = 4
 
-var markerDiscoveryIgnoredDirs = cloneExclusions(commonIgnoredDirs,
-	"vendor",
-	"dist",
-	".gocache",
-	".idea",
-	".vscode",
-)
+var markerDiscoveryIgnoredDirs = cloneExclusions(NewGenericDetector().Exclusions, ".gocache")
 
 func cloneExclusions(base map[string]bool, extras ...string) map[string]bool {
 	cloned := make(map[string]bool, len(base)+len(extras))
@@ -61,7 +55,7 @@ func discoverProjectMarkers(root string, markerNames ...string) ([]string, error
 		}
 
 		if d.IsDir() {
-			if path != root && shouldSkipDir(d.Name(), markerDiscoveryIgnoredDirs) {
+			if path != root && (shouldSkipDir(strings.ToLower(d.Name()), markerDiscoveryIgnoredDirs) || strings.HasPrefix(strings.ToLower(d.Name()), "cmake-build-")) {
 				return filepath.SkipDir
 			}
 			depth, ok := discoveryDepth(root, path)

@@ -13,7 +13,7 @@ import (
 	"github.com/PVRLabs/aibadger/internal/protocol"
 	"github.com/PVRLabs/aibadger/internal/workflow"
 	"github.com/PVRLabs/aibadger/internal/writer"
-	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 const gitHubRepositoryURL = "https://github.com/PVRLabs/aibadger"
@@ -180,7 +180,8 @@ func (m Model) renderCompletionSuggestions(candidate completionCandidate) string
 	activeIndex := m.completionActiveIndex(candidate)
 	var lines []string
 	for i, suggestion := range candidate.suggestions {
-		line := fmt.Sprintf("  %-12s %s", suggestion.label, suggestion.description)
+		padding := strings.Repeat(" ", max(0, 12-uniseg.StringWidth(suggestion.label)))
+		line := fmt.Sprintf("  %s%s %s", suggestion.label, padding, suggestion.description)
 		if i == activeIndex {
 			line = renderBold(line)
 		}
@@ -637,7 +638,7 @@ func countEditorVisualLines(text string, editorWidth int) int {
 	}
 	lines := 0
 	for _, line := range strings.Split(text, "\n") {
-		width := runewidth.StringWidth(line)
+		width := uniseg.StringWidth(line)
 		wrapped := (width + editorWidth - 1) / editorWidth
 		if wrapped < 1 {
 			wrapped = 1

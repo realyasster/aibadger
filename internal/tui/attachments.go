@@ -5,12 +5,11 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/PVRLabs/aibadger/internal/protocol"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 type goalFocusState int
@@ -173,20 +172,17 @@ func insertedText(before, after string) string {
 	if before == after {
 		return ""
 	}
+	left, right := []rune(before), []rune(after)
 	prefix := 0
-	for prefix < len(before) && prefix < len(after) && before[prefix] == after[prefix] {
+	for prefix < len(left) && prefix < len(right) && left[prefix] == right[prefix] {
 		prefix++
 	}
-	beforeSuffix := len(before)
-	afterSuffix := len(after)
-	for beforeSuffix > prefix && afterSuffix > prefix && before[beforeSuffix-1] == after[afterSuffix-1] {
+	beforeSuffix, afterSuffix := len(left), len(right)
+	for beforeSuffix > prefix && afterSuffix > prefix && left[beforeSuffix-1] == right[afterSuffix-1] {
 		beforeSuffix--
 		afterSuffix--
 	}
-	if prefix > afterSuffix {
-		return ""
-	}
-	return after[prefix:afterSuffix]
+	return string(right[prefix:afterSuffix])
 }
 
 func (m *Model) finishGoalPasteCapture() tea.Cmd {
@@ -421,9 +417,14 @@ func firstValidUTF8Bytes(text string, maxBytes int) (string, bool) {
 	if maxBytes <= 0 || len(text) <= maxBytes {
 		return text, false
 	}
-	limit := maxBytes
-	for limit > 0 && !utf8.ValidString(text[:limit]) {
-		limit--
+	limit := 0
+	clusters := uniseg.NewGraphemes(text)
+	for clusters.Next() {
+		_, end := clusters.Positions()
+		if end > maxBytes {
+			break
+		}
+		limit = end
 	}
 	return text[:limit], true
 }
@@ -480,12 +481,12 @@ func (m Model) goalAttachmentRowWidth() int {
 }
 
 func truncateGoalAttachmentRow(text string, maxWidth int) string {
-	if maxWidth <= 0 || runewidth.StringWidth(text) <= maxWidth {
+	if maxWidth <= 0 || uniseg.StringWidth(text) <= maxWidth {
 		return text
 	}
 
 	const ellipsis = "…"
-	ellipsisWidth := runewidth.StringWidth(ellipsis)
+	ellipsisWidth := uniseg.StringWidth(ellipsis)
 	if maxWidth <= ellipsisWidth {
 		return ellipsis
 	}
@@ -493,13 +494,13 @@ func truncateGoalAttachmentRow(text string, maxWidth int) string {
 	var b strings.Builder
 	width := 0
 	limit := maxWidth - ellipsisWidth
-	for _, r := range text {
-		rw := runewidth.RuneWidth(r)
-		if width+rw > limit {
+	clusters := uniseg.NewGraphemes(text)
+	for clusters.Next() {
+		if width+clusters.Width() > limit {
 			break
 		}
-		b.WriteRune(r)
-		width += rw
+		b.WriteString(clusters.Str())
+		width += clusters.Width()
 	}
 	b.WriteString(ellipsis)
 	return b.String()

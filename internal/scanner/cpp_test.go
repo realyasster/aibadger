@@ -411,8 +411,8 @@ func TestScannerIntegratesCppWithMixedLanguageWeighting(t *testing.T) {
 	if !reflect.DeepEqual(first, second) {
 		t.Fatalf("repeated scans differ\nfirst: %+v\nsecond: %+v", first, second)
 	}
-	if first.PrimaryLanguage != "C++" || !reflect.DeepEqual(first.Languages, []string{"C++", "Go"}) {
-		t.Fatalf("primary=%q languages=%v, want additive source-based C++ and Go", first.PrimaryLanguage, first.Languages)
+	if first.PrimaryLanguage != "C++" || !reflect.DeepEqual(first.Languages, []string{"C", "C++", "Go"}) {
+		t.Fatalf("primary=%q languages=%v, want additive source-based C, C++ and Go", first.PrimaryLanguage, first.Languages)
 	}
 	cppModules := 0
 	for i := range first.Modules {

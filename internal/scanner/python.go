@@ -235,7 +235,7 @@ func isPythonMarker(name string) bool {
 }
 
 func isPythonSourceFile(name string) bool {
-	return strings.ToLower(filepath.Ext(name)) == ".py"
+	return sourceExtensionLanguage(name) == "Python"
 }
 
 func recordPythonFile(packageMap map[string]*model.Package, fullRootPath, projectRoot, path, name string, size int64) {

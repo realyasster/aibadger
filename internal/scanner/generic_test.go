@@ -485,13 +485,13 @@ func TestGenericFallbackSurfacesControlConfigPrompt1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
-	if got := topology.PrimaryLanguage; got != "Generic" {
-		t.Fatalf("PrimaryLanguage = %q, want Generic", got)
+	if got := topology.PrimaryLanguage; got != "Unknown" {
+		t.Fatalf("PrimaryLanguage = %q, want Unknown without programming source", got)
 	}
 
 	output := protocol.NewFormatter().GenerateSchemaA(topology, "summarize this repository")
 	for _, want := range []string{
-		"Languages: Generic",
+		"Languages: Unknown",
 		"Pkg: . [7 files] -> Top:",
 		"Dockerfile",
 		"Makefile",

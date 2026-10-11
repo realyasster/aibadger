@@ -77,7 +77,7 @@ func (c *CSharpDetector) analyzeModule(projectRoot, moduleRoot string, markers [
 	if relModule == "" {
 		name = filepath.Base(projectRoot)
 	}
-	module := model.Module{Name: name, Path: relModule, Language: "C#"}
+	module := model.Module{Name: name, Path: relModule, Language: "C#", LanguageSourceFiles: make(map[string]string)}
 	sourceRoot := model.SourceRoot{Path: relModule, Role: "Main Source"}
 	packages := make(map[string]*model.Package)
 
@@ -142,7 +142,7 @@ func (c *CSharpDetector) scanModuleFiles(projectRoot, moduleRoot string, package
 				walk(path, depth+1)
 				continue
 			}
-			isSource := strings.EqualFold(filepath.Ext(entry.Name()), ".cs")
+			isSource := sourceExtensionLanguage(entry.Name()) == "C#"
 			if (isSource || isCSharpCompanionFile(moduleRoot, path)) && !shouldOmitFile(projectRoot, path, entry.Name()) {
 				c.recordFile(projectRoot, moduleRoot, path, isSource, packages, sourceRoot, module)
 			}
@@ -189,6 +189,7 @@ func (c *CSharpDetector) recordFile(projectRoot, moduleRoot, path string, langua
 	module.FileCount++
 	module.TotalBytes += info.Size()
 	if languageSource {
+		module.LanguageSourceFiles[normalizeTopologyFilePath(file.Path)] = "C#"
 		c.languageSourceCount++
 	}
 }

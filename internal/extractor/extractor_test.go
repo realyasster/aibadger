@@ -557,17 +557,8 @@ func TestExtractFallsBackToWholeFileWhenNearPatternMissesInSmallFile(t *testing.
 	results, err := e.Extract([]Command{
 		{Type: "NEAR", Path: "main.go", Pattern: "panic"},
 	})
-	if err != nil {
-		t.Fatalf("Extract() error = %v, want nil for whole-file fallback", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("results = %d, want one extraction", len(results))
-	}
-	if !results[0].FullFile {
-		t.Fatal("expected whole-file fallback to be marked fullFile")
-	}
-	if results[0].Content != content {
-		t.Fatalf("content = %q, want whole file %q", results[0].Content, content)
+	if err == nil || !strings.Contains(err.Error(), "pattern not found") || len(results) != 0 {
+		t.Fatalf("missing anchor must fail without fabricated content: results=%v err=%v", results, err)
 	}
 }
 
@@ -609,14 +600,8 @@ func TestExtractFallsBackToCompactWindowWhenPrefixPatternMissesInLargeFile(t *te
 	results, err := e.Extract([]Command{
 		{Type: "PREFIX", Path: "headless.go", Pattern: "func Start"},
 	})
-	if err != nil {
-		t.Fatalf("Extract() error = %v, want nil for compact-window fallback", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("results = %d, want one extraction", len(results))
-	}
-	if strings.TrimSpace(results[0].Content) == strings.TrimSpace(content) {
-		t.Fatalf("results = whole file, want compact window")
+	if err == nil || !strings.Contains(err.Error(), "pattern not found") || len(results) != 0 {
+		t.Fatalf("missing anchor must fail without fabricated content: results=%v err=%v", results, err)
 	}
 }
 

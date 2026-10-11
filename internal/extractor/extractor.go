@@ -3,12 +3,14 @@ package extractor
 // This file orchestrates command execution and Prompt 2 safety filtering.
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/PVRLabs/aibadger/internal/externalcontext"
 	"github.com/PVRLabs/aibadger/internal/filekind"
@@ -33,10 +35,21 @@ type ExtractionError struct {
 	Failures   []string
 	Excluded   []string
 	CanProceed bool
+	Metadata   []protocol.ExtractionMetadata
+}
+
+func (e *ExtractionError) Unwrap() error {
+	if len(e.Failures) == 0 && len(e.Excluded) > 0 && !e.CanProceed {
+		return ErrNoSafePrompt2Files
+	}
+	return nil
 }
 
 func (e *ExtractionError) Error() string {
 	var parts []string
+	if e.Unwrap() != nil {
+		parts = append(parts, ErrNoSafePrompt2Files.Error())
+	}
 	if len(e.Failures) > 0 {
 		parts = append(parts, fmt.Sprintf("extraction failed for %d command(s): %s", len(e.Failures), strings.Join(e.Failures, "; ")))
 	}
@@ -54,10 +67,12 @@ type Extractor struct {
 }
 
 type externalCommandResult struct {
-	content     string
-	fullFile    bool
-	matched     bool
-	displayPath string
+	content      string
+	fullFile     bool
+	matched      bool
+	displayPath  string
+	sourceSize   int
+	sourceSHA256 string
 }
 
 // NewExtractor creates a new Extractor instance.
@@ -101,16 +116,12 @@ func (e *Extractor) Extract(commands []Command) ([]protocol.ExtractionResult, er
 		go func(idx int, c Command) {
 			defer wg.Done()
 
-			path, content, fullFile, err := e.processCommand(c)
+			result, err := e.processCommandDetailed(c)
 			if err != nil {
 				errs[idx] = err
 				return
 			}
-			results[idx] = protocol.ExtractionResult{
-				Path:     path,
-				Content:  content,
-				FullFile: fullFile,
-			}
+			results[idx] = result
 		}(i, cmd)
 	}
 
@@ -120,8 +131,14 @@ func (e *Extractor) Extract(commands []Command) ([]protocol.ExtractionResult, er
 	failures := make([]string, 0)
 	excludedFailures := make([]string, 0)
 	excluded := 0
+	var issueMetadata []protocol.ExtractionMetadata
 	for i, result := range results {
 		if errs[i] != nil {
+			status := "Failed"
+			if errors.Is(errs[i], errPrompt2Excluded) {
+				status = "Excluded"
+			}
+			issueMetadata = append(issueMetadata, protocol.ExtractionMetadata{Path: commands[i].Path, Status: status, Reason: errs[i].Error()})
 			if errors.Is(errs[i], errPrompt2Excluded) {
 				excluded++
 				excludedFailures = append(excludedFailures, fmt.Sprintf("%s: excluded from Prompt 2", commands[i].Path))
@@ -133,17 +150,19 @@ func (e *Extractor) Extract(commands []Command) ([]protocol.ExtractionResult, er
 		extracted = append(extracted, result)
 	}
 	if len(extracted) == 0 && excluded > 0 && len(failures) == 0 {
-		return nil, ErrNoSafePrompt2Files
+		return nil, &ExtractionError{Excluded: excludedFailures, Metadata: issueMetadata}
 	}
 	if len(extracted) > 0 && (len(failures) > 0 || excluded > 0) {
 		return extracted, &ExtractionError{
 			Failures:   append([]string(nil), failures...),
 			Excluded:   append([]string(nil), excludedFailures...),
 			CanProceed: true,
+			Metadata:   issueMetadata,
 		}
 	}
 	if len(failures) > 0 {
 		return extracted, &ExtractionError{
+			Metadata: issueMetadata,
 			Failures: append([]string(nil), failures...),
 			Excluded: append([]string(nil), excludedFailures...),
 		}
@@ -152,59 +171,68 @@ func (e *Extractor) Extract(commands []Command) ([]protocol.ExtractionResult, er
 }
 
 func (e *Extractor) processCommand(cmd Command) (string, string, bool, error) {
+	r, err := e.processCommandDetailed(cmd)
+	return r.Path, r.Content, r.FullFile, err
+}
+
+func (e *Extractor) processCommandDetailed(cmd Command) (protocol.ExtractionResult, error) {
 	resolvedPath := e.resolveCommandPath(cmd.Path)
 	if resolvedPath != "" {
-		content, fullFile, err := e.processLocalCommand(cmd, resolvedPath)
-		return cmd.Path, content, fullFile, err
+		r, err := e.processLocalCommand(cmd, resolvedPath)
+		r.Path = cmd.Path
+		return r, err
 	}
 
 	externalResult, err := e.processExternalCommand(cmd)
 	if err != nil {
-		return "", "", false, err
+		return protocol.ExtractionResult{}, err
 	}
 	if externalResult.matched {
-		return externalResult.displayPath, externalResult.content, externalResult.fullFile, nil
+		return protocol.ExtractionResult{Path: externalResult.displayPath, Content: externalResult.content, FullFile: externalResult.fullFile, SourceSize: externalResult.sourceSize, SourceSHA256: externalResult.sourceSHA256}, nil
 	}
 
-	return "", "", false, fmt.Errorf("file not found: %s", cmd.Path)
+	return protocol.ExtractionResult{}, fmt.Errorf("file not found: %s", cmd.Path)
 }
 
-func (e *Extractor) processLocalCommand(cmd Command, resolvedPath string) (string, bool, error) {
+func (e *Extractor) processLocalCommand(cmd Command, resolvedPath string) (protocol.ExtractionResult, error) {
+	var result protocol.ExtractionResult
 	if promptpolicy.IsSensitivePath(resolvedPath) {
-		return "", false, errPrompt2Excluded
+		return result, errPrompt2Excluded
 	}
-
 	absolutePath := filepath.Join(e.ProjectRoot, resolvedPath)
 	if !isWithinProjectRoot(e.ProjectRoot, absolutePath) {
-		return "", false, fmt.Errorf("file not found: %s", cmd.Path)
+		return result, fmt.Errorf("file not found: %s", cmd.Path)
 	}
 	kind := filekind.Classify(absolutePath)
 	if kind == model.FileKindBinary {
-		return "", false, errPrompt2Excluded
+		return result, errPrompt2Excluded
 	}
 	if kind == model.FileKindAsset {
 		info, err := os.Stat(absolutePath)
 		if err != nil {
-			return "", false, fmt.Errorf("file not found: %s", cmd.Path)
+			return result, err
 		}
-		return summarizeBinaryFile(resolvedPath, absolutePath, int(info.Size()), kind), false, nil
+		result.Content = summarizeBinaryFile(resolvedPath, absolutePath, int(info.Size()), kind)
+		result.SourceSize = int(info.Size())
+		return result, nil
 	}
-
 	data, err := os.ReadFile(absolutePath)
 	if err != nil {
-		return "", false, fmt.Errorf("file not found: %s", cmd.Path)
+		return result, fmt.Errorf("read %s: %w", cmd.Path, err)
 	}
-
-	content := string(data)
+	if !utf8.Valid(data) {
+		return result, fmt.Errorf("invalid UTF-8 in %s; provide a UTF-8 source file (no automatic conversion)", cmd.Path)
+	}
+	result.SourceSize = len(data)
+	result.SourceSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
 	if cmd.Type == "FILE" {
-		return content, true, nil
+		result.Content, result.FullFile = string(data), true
+		return result, nil
 	}
-
-	extracted, fullFile, err := e.extractBlock(content, cmd.Type, cmd.Pattern)
-	if err != nil {
-		return "", false, err
-	}
-	return extracted, fullFile, nil
+	result.Content, _, err = e.extractBlock(string(data), cmd.Type, cmd.Pattern)
+	// Selectors are intentionally partial, even when a small fallback includes
+	// all lines. They are not a substitute for an explicit FILE request.
+	return result, err
 }
 
 func (e *Extractor) processExternalCommand(cmd Command) (externalCommandResult, error) {
@@ -236,26 +264,32 @@ func (e *Extractor) processExternalCommand(cmd Command) (externalCommandResult, 
 			return result, fmt.Errorf("file not found: %s", requestPath)
 		}
 		result.content = summarizeBinaryFile(match.DisplayPath, absolutePath, int(info.Size()), kind)
-		result.fullFile = cmd.Type == "FILE"
+		result.sourceSize = int(info.Size())
+		result.fullFile = false
 		return result, nil
 	}
 	data, err := os.ReadFile(absolutePath)
 	if err != nil {
 		return result, fmt.Errorf("file not found: %s", requestPath)
 	}
+	if !utf8.Valid(data) {
+		return result, fmt.Errorf("invalid UTF-8 in %s; provide a UTF-8 source file (no automatic conversion)", requestPath)
+	}
 	content := string(data)
+	result.sourceSize = len(data)
+	result.sourceSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
 	if cmd.Type == "FILE" {
 		result.content = content
 		result.fullFile = true
 		return result, nil
 	}
 
-	extracted, fullFile, err := e.extractBlock(content, cmd.Type, cmd.Pattern)
+	extracted, _, err := e.extractBlock(content, cmd.Type, cmd.Pattern)
 	if err != nil {
 		return result, err
 	}
 	result.content = extracted
-	result.fullFile = fullFile
+	result.fullFile = false
 	return result, nil
 }
 

@@ -131,7 +131,10 @@ func (e *Engine) GenerateReviewContinuation(commands []extractor.Command) (strin
 		var extractionErr *extractor.ExtractionError
 		if errors.As(err, &extractionErr) && extractionErr.CanProceed && len(extractions) > 0 {
 			prompt, metadata := e.formatter.GenerateReviewContinuation(extractions, reviewtask.RepositoryMarker(e.Root))
-			return prompt, metadata, len(extractions), append([]string(nil), extractionErr.Failures...), append([]string(nil), extractionErr.Excluded...), nil
+			return prompt, append(metadata, extractionErr.Metadata...), len(extractions), append([]string(nil), extractionErr.Failures...), append([]string(nil), extractionErr.Excluded...), nil
+		}
+		if extractionErr != nil {
+			return "", extractionErr.Metadata, 0, extractionErr.Failures, extractionErr.Excluded, err
 		}
 		return "", nil, 0, nil, nil, err
 	}
@@ -148,7 +151,10 @@ func (e *Engine) GenerateContextDetailed(goal string, commands []extractor.Comma
 		var extractionErr *extractor.ExtractionError
 		if errors.As(err, &extractionErr) && extractionErr.CanProceed && len(extractions) > 0 {
 			schema, metadata := e.formatter.GenerateSchemaB(e.Topology, extractions, goal)
-			return schema, metadata, len(extractions), append([]string(nil), extractionErr.Failures...), append([]string(nil), extractionErr.Excluded...), nil
+			return schema, append(metadata, extractionErr.Metadata...), len(extractions), append([]string(nil), extractionErr.Failures...), append([]string(nil), extractionErr.Excluded...), nil
+		}
+		if extractionErr != nil {
+			return "", extractionErr.Metadata, 0, extractionErr.Failures, extractionErr.Excluded, err
 		}
 		return "", nil, 0, nil, nil, err
 	}

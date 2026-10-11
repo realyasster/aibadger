@@ -6,17 +6,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func detectedStack(root string) []string {
 	found := make(map[string]bool)
 	nodeSignals := detectNodeStacks(root)
+	exclusions := NewGenericDetector().Exclusions
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			if shouldSkipDir(d.Name(), commonIgnoredDirs) || shouldSkipTopLevelOpsDir(root, path, d.Name()) {
+			if path != root && (shouldSkipDir(strings.ToLower(d.Name()), exclusions) || strings.HasPrefix(strings.ToLower(d.Name()), "cmake-build-") || shouldSkipTopLevelOpsDir(root, path, d.Name())) {
 				return filepath.SkipDir
 			}
 			return nil
@@ -55,12 +57,13 @@ type nodeDependencySet struct {
 
 func detectNodeStacks(root string) map[string]bool {
 	signals := make(map[string]bool)
+	exclusions := NewGenericDetector().Exclusions
 	filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
-			if shouldSkipDir(d.Name(), commonIgnoredDirs) || shouldSkipTopLevelOpsDir(root, path, d.Name()) {
+			if path != root && (shouldSkipDir(strings.ToLower(d.Name()), exclusions) || strings.HasPrefix(strings.ToLower(d.Name()), "cmake-build-") || shouldSkipTopLevelOpsDir(root, path, d.Name())) {
 				return filepath.SkipDir
 			}
 			return nil

@@ -362,13 +362,33 @@ func sanitizeReviewPreparationError(root string, err error) error {
 }
 
 func replacePathFold(message, path, replacement string) string {
-	for {
-		index := strings.Index(strings.ToLower(message), strings.ToLower(path))
-		if index < 0 {
-			return message
-		}
-		message = message[:index] + replacement + message[index+len(path):]
+	// Case folding can change UTF-8 byte lengths (İ, K). Match original rune
+	// boundaries, never use indices from a lowercased copy. EqualFold is
+	// language-neutral; it does not conflate Turkish I/ı or İ/i.
+	count := utf8.RuneCountInString(path)
+	if count == 0 {
+		return message
 	}
+	var offsets []int
+	for offset := range message {
+		offsets = append(offsets, offset)
+	}
+	offsets = append(offsets, len(message))
+	var result strings.Builder
+	last := 0
+	for i := 0; i+count < len(offsets); {
+		start, end := offsets[i], offsets[i+count]
+		if strings.EqualFold(message[start:end], path) {
+			result.WriteString(message[last:start])
+			result.WriteString(replacement)
+			last = end
+			i += count
+		} else {
+			i++
+		}
+	}
+	result.WriteString(message[last:])
+	return result.String()
 }
 
 func readReviewPaths(path string) ([]string, error) {

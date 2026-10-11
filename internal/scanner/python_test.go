@@ -17,11 +17,11 @@ func TestPythonDetectorReportsMarkerOnlyProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
-	if !reflect.DeepEqual(topology.Languages, []string{"Python"}) {
-		t.Fatalf("Languages = %v, want [Python]", topology.Languages)
+	if !reflect.DeepEqual(topology.Languages, []string{"Unknown"}) {
+		t.Fatalf("Languages = %v, want [Unknown] for marker-only project", topology.Languages)
 	}
-	if topology.PrimaryLanguage != "Python" {
-		t.Fatalf("PrimaryLanguage = %q, want Python", topology.PrimaryLanguage)
+	if topology.PrimaryLanguage != "Unknown" {
+		t.Fatalf("PrimaryLanguage = %q, want Unknown without actual source", topology.PrimaryLanguage)
 	}
 	if len(topology.Modules) != 1 {
 		t.Fatalf("len(Modules) = %d, want 1", len(topology.Modules))

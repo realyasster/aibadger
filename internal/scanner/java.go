@@ -247,7 +247,7 @@ func javaPackageName(relPkgPath string) string {
 }
 
 func isJavaSourceFile(name string) bool {
-	return strings.HasSuffix(name, ".java")
+	return sourceExtensionLanguage(name) == "Java"
 }
 
 func isJavaResourceFile(name string) bool {

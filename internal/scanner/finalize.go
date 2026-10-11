@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/PVRLabs/aibadger/internal/filekind"
 	"github.com/PVRLabs/aibadger/internal/model"
 )
 
@@ -31,24 +30,26 @@ func (s *Scanner) finalizeTopologyWithLanguageWeights(t *model.ProjectTopology, 
 
 	weights := make(map[string]int64)
 	languageSet := make(map[string]bool)
-	for _, lang := range t.Languages {
-		if lang != "" {
-			languageSet[lang] = true
+	if languageWeights == nil {
+		for _, lang := range t.Languages {
+			if lang != "" {
+				languageSet[lang] = true
+			}
 		}
 	}
 	for _, m := range t.Modules {
 		if m.Language == "" {
 			continue
 		}
-		languageSet[m.Language] = true
 		if languageWeights != nil {
 			continue
 		}
+		languageSet[m.Language] = true
 		weights[m.Language] += int64(m.FileCount)
 	}
 	if languageWeights != nil {
 		for lang, weight := range languageWeights {
-			if lang == "" {
+			if lang == "" || weight <= 0 {
 				continue
 			}
 			languageSet[lang] = true
@@ -57,7 +58,7 @@ func (s *Scanner) finalizeTopologyWithLanguageWeights(t *model.ProjectTopology, 
 	}
 
 	primary := dominantLanguage(weights)
-	if primary == "" && len(languageSet) == 1 {
+	if primary == "" && languageWeights == nil && len(languageSet) == 1 {
 		primary = sortedLanguages(languageSet, "")[0]
 	}
 	if primary == "" {
@@ -94,38 +95,58 @@ func isLanguageOwnedSourceRoot(role string) bool {
 }
 
 func sourceLanguageWeightsFromModules(modules []model.Module, projectRoot string) map[string]int64 {
-	weights := make(map[string]int64)
+	return sourceLanguageWeightsWithSupplement(modules, projectRoot, nil)
+}
+
+func sourceLanguageWeightsWithSupplement(modules []model.Module, projectRoot string, supplemental map[string]string) map[string]int64 {
+	files := make(map[string]string)
+	legacy := make(map[string]int64)
+	legacySeen := make(map[string]bool)
 	for _, module := range modules {
-		if module.Language == "" {
+		if module.LanguageSourceFiles != nil {
+			for path, language := range module.LanguageSourceFiles {
+				files[normalizeTopologyFilePath(path)] = language
+			}
 			continue
 		}
 		if module.Coverage {
+			// Compatibility for synthetic callers without accepted path records.
+			identity := stableModuleContentIdentity(module, true)
+			if legacySeen[identity] {
+				continue
+			}
+			legacySeen[identity] = true
 			count := module.LanguageSourceCount
 			if count == 0 {
 				count = module.FileCount
 			}
-			weights[module.Language] += int64(count)
+			legacy[module.Language] += int64(count)
 			continue
 		}
 		if isFirstClassCSharpModule(&module) || isFirstClassCppModule(&module) {
 			continue
 		}
-		weights[module.Language] += int64(countModuleLanguageSourceFiles(module, projectRoot))
+		for _, root := range module.SourceRoots {
+			if !isLanguageOwnedSourceRoot(root.Role) {
+				continue
+			}
+			for _, pkg := range root.Packages {
+				seen := make(map[string]bool)
+				countLanguageSourceFilesInDir(module.Language, projectRoot, pkg.Path, seen)
+				for path := range seen {
+					files[path] = sourceFileLanguage(filepath.Join(projectRoot, path))
+				}
+			}
+		}
+	}
+	for path, language := range supplemental {
+		files[normalizeTopologyFilePath(path)] = language
+	}
+	weights := sourceWeights(files)
+	for language, count := range legacy {
+		weights[language] += count
 	}
 	return weights
-}
-
-func countModuleLanguageSourceFiles(module model.Module, projectRoot string) int {
-	seen := make(map[string]bool)
-	for _, sourceRoot := range module.SourceRoots {
-		if !isLanguageOwnedSourceRoot(sourceRoot.Role) {
-			continue
-		}
-		for _, pkg := range sourceRoot.Packages {
-			countLanguageSourceFilesInDir(module.Language, projectRoot, pkg.Path, seen)
-		}
-	}
-	return len(seen)
 }
 
 func countLanguageSourceFilesInDir(language, projectRoot, relDir string, seen map[string]bool) {
@@ -135,7 +156,12 @@ func countLanguageSourceFilesInDir(language, projectRoot, relDir string, seen ma
 		return
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !isLanguageSourceFile(language, filepath.Join(relDir, entry.Name())) {
+		if entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		detected := programmingSourceLanguage(projectRoot, filepath.Join(fullDir, entry.Name()))
+		nodeSource := (language == "JavaScript" || language == "TypeScript" || language == "Vue") && isNodeSourceFile(entry.Name())
+		if detected == "" || detected != language && language != "Generic" && !nodeSource {
 			continue
 		}
 		seen[normalizeTopologyFilePath(filepath.Join(relDir, entry.Name()))] = true
@@ -143,40 +169,8 @@ func countLanguageSourceFilesInDir(language, projectRoot, relDir string, seen ma
 }
 
 func isLanguageSourceFile(language, path string) bool {
-	name := filepath.Base(path)
-	if genericExtensionLanguages[strings.ToLower(filepath.Ext(name))] == language {
-		return true
-	}
-	switch language {
-	case "Go":
-		return isGoSourceFile(name)
-	case "Java":
-		return isJavaSourceFile(name)
-	case "Python":
-		return isPythonSourceFile(name)
-	case "JavaScript":
-		return isNodeSourceFile(name) && !isTypeScriptSourceFile(name)
-	case "TypeScript":
-		return isTypeScriptSourceFile(name)
-	case "C#":
-		return strings.EqualFold(filepath.Ext(name), ".cs")
-	case "C++":
-		return isCppLanguageSourceFile(name)
-	case "Generic":
-		kind := filekind.Classify(path)
-		return kind != model.FileKindAsset && kind != model.FileKindBinary
-	default:
-		return false
-	}
-}
-
-func isTypeScriptSourceFile(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".ts", ".tsx", ".cts", ".mts":
-		return true
-	default:
-		return false
-	}
+	detected := sourceFileLanguage(path)
+	return detected != "" && (detected == language || language == "Generic")
 }
 
 func sortedLanguages(languageSet map[string]bool, primary string) []string {

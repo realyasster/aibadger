@@ -647,8 +647,8 @@ func TestRunAPIExtractMatchesEngineSchemaB(t *testing.T) {
 	if strings.Count(stdout.String(), "--- File: go.mod") != 1 {
 		t.Fatalf("duplicate FILE selector was not deduplicated:\n%s", stdout.String())
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if !strings.Contains(stderr.String(), "sha256=") {
+		t.Fatalf("missing integrity report: %s", stderr.String())
 	}
 	for path, want := range map[string][]byte{selectorsPath: selectors, goalPath: goal} {
 		if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, want) {
@@ -680,7 +680,7 @@ func TestRunAPIReviewContinuationProducesOnlySupplementalCurrentContext(t *testi
 	if strings.Contains(stdout.String(), root) {
 		t.Fatalf("continuation stdout leaked absolute root %q", root)
 	}
-	for _, want := range []string{"[REVIEW CONTINUATION]", "filesystem at continuation time", "continuationState", "--- File: go.mod (Full File) ---"} {
+	for _, want := range []string{"[REVIEW CONTINUATION]", "filesystem at continuation time", "continuationState", "--- File: go.mod (Extracted Span) ---"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q:\n%s", want, stdout.String())
 		}
@@ -696,8 +696,8 @@ func TestRunAPIReviewContinuationProducesOnlySupplementalCurrentContext(t *testi
 	if strings.Count(stdout.String(), "--- File: main.go") != 1 {
 		t.Fatalf("duplicate selector was not deduplicated:\n%s", stdout.String())
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	if !strings.Contains(stderr.String(), "sha256=") {
+		t.Fatalf("missing integrity report: %s", stderr.String())
 	}
 
 	// With one selected file, the exact successful output size is also the
@@ -715,8 +715,8 @@ func TestRunAPIReviewContinuationProducesOnlySupplementalCurrentContext(t *testi
 	}
 	stdout.Reset()
 	err = RunAPI(Config{Root: root}, APIOptions{Operation: "review-continuation", InputPath: singleSelector, MaxReviewPayloadBytes: exactBytes - 1, Stdout: &stdout, Stderr: &stderr})
-	if err == nil || !strings.Contains(err.Error(), "leaves no usable supplemental context") || stdout.Len() != 0 {
-		t.Fatalf("one byte below marker-inclusive continuation limit = error %v stdout %q", err, stdout.String())
+	if err != nil || stdout.String() != baseline.String() || !strings.Contains(stderr.String(), "complete content retained") {
+		t.Fatalf("over-limit output must be lossless: err=%v", err)
 	}
 }
 
@@ -754,7 +754,7 @@ func TestRunAPIReviewContinuationPartialSafetyAndLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunAPI() partial error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "main.go (Full File, Truncated)") || !strings.Contains(stdout.String(), "preview.png (Binary Summary, Truncated)") {
+	if !strings.Contains(stdout.String(), "main.go (Full File)") || !strings.Contains(stdout.String(), "preview.png (Binary Summary)") {
 		t.Fatalf("stdout missing bounded usable context:\n%s", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "SECRET=value") {
@@ -768,8 +768,8 @@ func TestRunAPIReviewContinuationPartialSafetyAndLimits(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	err = RunAPI(Config{Root: root}, APIOptions{Operation: "review-continuation", InputPath: selectors, MaxReviewPayloadBytes: 1, Stdout: &stdout, Stderr: &stderr})
-	if err == nil || !strings.Contains(err.Error(), "leaves no usable supplemental context") || stdout.Len() != 0 {
-		t.Fatalf("tiny limit = error %v stdout %q", err, stdout.String())
+	if err != nil || !strings.Contains(stdout.String(), "func alpha()") || !strings.Contains(stderr.String(), "complete content retained") {
+		t.Fatalf("tiny limit must preserve usable files: error %v", err)
 	}
 }
 
@@ -1031,18 +1031,8 @@ func TestRunAPIExtractPreservesLimitsAndExternalContext(t *testing.T) {
 		t.Fatalf("stderr missing ambiguity:\n%s", stderrText)
 	}
 
-	// --- Per-file truncation metadata (both valid files exceed perFileLimit) -
-	if !strings.Contains(stderrText, "TRUNCATED") {
-		t.Fatalf("stderr missing truncation:\n%s", stderrText)
-	}
-
-	// --- Total-limit drop metadata -----------------------------------------
-	if !strings.Contains(stderrText, "DROPPED - EXCEEDS TOTAL LIMIT") {
-		t.Fatalf("stderr missing total-limit drop:\n%s", stderrText)
-	}
-	dropped := strings.Count(stderrText, "DROPPED - EXCEEDS TOTAL LIMIT")
-	if dropped != 1 {
-		t.Fatalf("expected 1 dropped file, got %d:\n%s", dropped, stderrText)
+	if strings.Count(stderrText, "complete content retained") != 2 || strings.Contains(stderrText, "TRUNCATED") || strings.Contains(stderrText, "DROPPED") {
+		t.Fatalf("both over-limit files must request export without loss:\n%s", stderrText)
 	}
 
 	// The ambiguous request must not be counted as a total-limit drop.
@@ -1057,13 +1047,8 @@ func TestRunAPIExtractPreservesLimitsAndExternalContext(t *testing.T) {
 	if !strings.Contains(stdoutText, extDisplayPath) {
 		t.Fatalf("stdout missing surviving file %q:\n%s", extDisplayPath, stdoutText)
 	}
-	if !strings.Contains(stdoutText, "Truncated") {
-		t.Fatalf("stdout missing Truncated label:\n%s", stdoutText)
-	}
-
-	// --- Dropped file absent from stdout (no file block) -------------------
-	if strings.Contains(stdoutText, "--- File: main.go ") {
-		t.Fatalf("stdout contains dropped file section:\n%s", stdoutText)
+	if !strings.Contains(stdoutText, string(extContent)) || !strings.Contains(stdoutText, mainBody) {
+		t.Fatal("over-limit source bytes must all be present")
 	}
 
 	// --- External context file not modified --------------------------------

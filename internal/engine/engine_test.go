@@ -81,20 +81,17 @@ func TestGenerateContextFallsBackForMissingSelectorAnchors(t *testing.T) {
 	commands := eng.ParseCommands("PREFIX:pkg/badger/headless.go#func Start")
 
 	schema, metadata, count, failed, excluded, err := eng.GenerateContextDetailed("find crash paths", commands)
-	if err != nil {
-		t.Fatalf("GenerateContextDetailed() error = %v, want nil for fallback", err)
+	if err == nil || schema != "" || !strings.Contains(err.Error(), "pattern not found") {
+		t.Fatalf("missing selector must fail: schema=%s err=%v", schema, err)
 	}
-	if count != 1 || len(failed) != 0 || len(excluded) != 0 {
+	if count != 0 || len(failed) != 1 || len(excluded) != 0 {
 		t.Fatalf("GenerateContextDetailed() count = %d, failed = %v, excluded = %v", count, failed, excluded)
 	}
 	if len(metadata) != 1 {
 		t.Fatalf("metadata = %d entries, want 1", len(metadata))
 	}
-	if !strings.Contains(schema, "--- File: pkg/badger/headless.go (Full File) ---") {
-		t.Fatalf("schema missing extracted file blocks:\n%s", schema)
-	}
-	if !strings.Contains(schema, "package badger") {
-		t.Fatalf("schema missing fallback file content:\n%s", schema)
+	if metadata[0].Status != "Failed" {
+		t.Fatalf("metadata must report failure: %+v", metadata)
 	}
 }
 
@@ -123,8 +120,8 @@ func TestGenerateContextDetailedAllowsMissingFilesWhenSomeContentIsUsable(t *tes
 	if len(safetyExclusions) != 0 {
 		t.Fatalf("safetyExclusions = %v, want none", safetyExclusions)
 	}
-	if len(metadata) != 1 {
-		t.Fatalf("metadata = %d entries, want 1", len(metadata))
+	if len(metadata) != 2 || metadata[1].Status != "Failed" {
+		t.Fatalf("metadata must include failed request: %+v", metadata)
 	}
 	if !strings.Contains(schema, "present.go") {
 		t.Fatalf("schema missing usable extraction:\n%s", schema)
