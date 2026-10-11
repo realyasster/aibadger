@@ -26,11 +26,12 @@ clipboard transfer. No in-app text-selection/highlighting model has been added;
 mouse/keyboard selection offered by the terminal must be verified in that
 terminal. Fonts and terminal versions can differ in emoji display width.
 
-On Windows, native console input is Unicode. Badger warns when attached console
-code pages are not 65001 because external tools/pipes may still use legacy
-encodings. It does not change the terminal's code page or PowerShell preferences.
-Use Windows Terminal and `chcp 65001` when interoperating with UTF-8 tools.
-This warning is independent of clipboard encoding and readback verification.
+On Windows, native console input is Unicode. A legacy console code page alone
+is not evidence of a TUI layout/input failure, so Badger does not display a
+startup warning for it or change the code page or PowerShell preferences.
+External tools/pipes may still use legacy encodings; use Windows Terminal and
+`chcp 65001` when interoperating with tools that require UTF-8 console encoding.
+Clipboard encoding and exact readback verification remain independent.
 
 ## Automated tests
 
@@ -85,7 +86,7 @@ and available Linux/macOS terminals:
    readback; save to a file if verification fails. Verify destination-app paste
    separately: copy-time readback cannot prove what another app later changes.
 7. Run the native clipboard integration test from each shell. On Windows, repeat
-   with code page 65001 and a legacy code page; confirm any warning is actionable.
+   with code page 65001 and a legacy code page; verify text integrity in both.
 
 ```text
 UTF-8 test metni

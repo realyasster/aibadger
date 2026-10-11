@@ -170,12 +170,3 @@ func TestUnicodeEditorWrapCountsTerminalCells(t *testing.T) {
 		}
 	}
 }
-
-func TestNonUTF8ConsoleWarning(t *testing.T) {
-	if consoleCodePageWarning(65001, 65001) != "" {
-		t.Fatal("UTF-8 console must not warn")
-	}
-	if warning := consoleCodePageWarning(857, 1254); !strings.Contains(warning, "chcp 65001") || !strings.Contains(warning, "Clipboard encoding is checked separately") {
-		t.Fatalf("warning=%s", warning)
-	}
-}

@@ -183,7 +183,6 @@ func RunWithConfig(root string, cfg Config) error {
 		return nil
 	}
 	m := NewModel(root, cfg)
-	m.startupWarnings = append(m.startupWarnings, terminalUnicodeWarnings()...)
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithFPS(tuiRendererFPS)).Run()
 	return err
 }
